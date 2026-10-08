@@ -1,0 +1,12 @@
+__pycache__/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.venv/
+
+# Credentials.
+.env
+
+# Where traces land by default. They hold prompts and code; never commit them.
+.boltz/
