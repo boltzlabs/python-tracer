@@ -97,6 +97,26 @@ with bt.llm(model="my-model", input=messages) as s:
     s.usage(input=reply.tokens_in, output=reply.tokens_out)
 ```
 
+## OpenCode
+
+OpenCode is not a Python program, so it cannot import this package. It keeps
+its own record of a session instead, and that converts into the same trace
+files:
+
+```bash
+opencode export <session-id> > session.json
+python -m boltztracer.opencode session.json --task fix-pagination
+python -m boltztracer
+```
+
+The session is the run, each turn is a step holding its model call and the
+tools it ran, and a sub-agent's session is drawn inside the call that started
+it. Give it several files at once and sub-agent sessions find their parents.
+`--model` and `--attempt` label the run for comparison; without `--model` the
+session's own model is used. `boltztracer/opencode.py` imports nothing but the
+standard library, so it also runs as a plain script where the package is not
+installed.
+
 ## Cost
 
 Tokens are always recorded. Cost needs a price, in USD per million tokens:
