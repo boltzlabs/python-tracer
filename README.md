@@ -113,9 +113,11 @@ The session is the run, each turn is a step holding its model call and the
 tools it ran, and a sub-agent's session is drawn inside the call that started
 it. Give it several files at once and sub-agent sessions find their parents.
 `--model` and `--attempt` label the run for comparison; without `--model` the
-session's own model is used. `boltztracer/opencode.py` imports nothing but the
-standard library, so it also runs as a plain script where the package is not
-installed.
+session's own model is used. OpenCode records a cost only for models it has a
+price list for; `--price 3,15,0.3` (input, output and cached input, in USD per
+million tokens) prices the calls it left without one, and never replaces a
+cost it did record. `boltztracer/opencode.py` imports nothing but the standard
+library, so it also runs as a plain script where the package is not installed.
 
 ## Cost
 

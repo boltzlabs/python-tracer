@@ -181,3 +181,29 @@ def test_the_command_writes_files_the_viewer_reads(tmp_path, capsys):
     # Running it again replaces the file rather than doubling it.
     opencode.main([FIXTURE, "--out", str(out)])
     assert len(list(out.iterdir())) == 1
+
+
+
+def test_a_price_fills_in_the_cost_opencode_did_not_know(session, tmp_path, capsys):
+    # deepseek-v4-flash style prices: $0.14 in, $0.28 out, $0.028 cached per million.
+    (records,) = opencode.convert([session], price=(0.14, 0.28, 0.028)).values()
+    first = next(r for r in records if r["kind"] == "llm")
+    # 231 fresh in, 7680 cached, 65 out (58 + 7 reasoning).
+    assert first["cost"] == pytest.approx((231 * 0.14 + 7680 * 0.028 + 65 * 0.28) / 1e6)
+    root = next(r for r in records if r["parent_id"] is None)
+    assert root["totals"]["cost"] == pytest.approx(sum(r["cost"] for r in records if r["kind"] == "llm"))
+
+    # A cost OpenCode did record is kept: it knew that model's price.
+    session["messages"][1]["info"]["cost"] = 0.5
+    (records,) = opencode.convert([session], price=(0.14, 0.28, 0.028)).values()
+    assert next(r for r in records if r["kind"] == "llm")["cost"] == 0.5
+
+    # From the command line, and the viewer shows it.
+    out = tmp_path / "t"
+    assert opencode.main([FIXTURE, "--out", str(out), "--price", "0.14,0.28,0.028"]) == 0
+    buf = io.StringIO()
+    view([str(out)], out=buf)
+    assert "$0.00" in buf.getvalue() and "  -\n" not in buf.getvalue().splitlines()[1]
+    with pytest.raises(SystemExit):
+        opencode.main([FIXTURE, "--out", str(out), "--price", "cheap"])
+

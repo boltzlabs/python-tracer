@@ -91,9 +91,10 @@ def load(path):
 class _Trace:
     """The records of one trace, and the running totals its root reports."""
 
-    def __init__(self, trace_id, labels):
+    def __init__(self, trace_id, labels, price=None):
         self.trace_id = trace_id
         self.labels = labels
+        self.price = price
         self.records = []
         self.totals = {
             "spans": 0, "llm_calls": 0, "tool_calls": 0, "errors": 0,
@@ -234,7 +235,21 @@ def _session(trace, sess, parent_id, by_id, children_of, used, name=None):
         if text:
             final_text = text
         model = minfo.get("modelID") or _g(info, "model", "id")
+        usage = _usage(minfo.get("tokens"))
         cost = minfo.get("cost")
+        cost = float(cost) if isinstance(cost, (int, float)) and cost > 0 else None
+        if cost is None and trace.price and usage:
+            # OpenCode did not know what this model costs; the caller does.
+            p_in, p_out, p_cached = trace.price
+            cost = round(
+                (
+                    (usage.get("input", 0) + usage.get("cache_write", 0)) * p_in
+                    + usage.get("cached", 0) * p_cached
+                    + usage.get("output", 0) * p_out
+                )
+                / 1e6,
+                8,
+            )
         trace.add(
             "llm:" + mid, turn_id, "chat %s" % model if model else "llm", "llm", t0, llm_end,
             model=model,
@@ -244,8 +259,8 @@ def _session(trace, sess, parent_id, by_id, children_of, used, name=None):
                 "content": text or None,
                 "tool_calls": [{"name": p.get("tool"), "arguments": _g(p, "state", "input")} for p in tools],
             },
-            usage=_usage(minfo.get("tokens")),
-            cost=float(cost) if isinstance(cost, (int, float)) and cost > 0 else None,
+            usage=usage,
+            cost=cost,
             meta={"finish_reason": minfo.get("finish"), "reasoning": _text(parts, "reasoning"), "agent": minfo.get("agent")},
             error=error,
         )
@@ -288,12 +303,16 @@ def _session(trace, sess, parent_id, by_id, children_of, used, name=None):
     )
 
 
-def convert(sessions, task=None, model=None, attempt=None, tags=None):
+def convert(sessions, task=None, model=None, attempt=None, tags=None, price=None):
     """``{trace_id: [records]}`` for a list of `opencode export` documents.
 
     A session that another one started (a sub-agent) is drawn inside its parent
     rather than as a run of its own. ``task``, ``model`` and ``attempt`` label
     the traces; without them the session's title and model are used.
+
+    ``price`` is ``(input, output, cached)`` in US dollars per million tokens.
+    It prices the model calls OpenCode recorded no cost for, which is every
+    call to a model it has no price list for.
     """
     by_id = {s["info"]["id"]: s for s in sessions if _g(s, "info", "id")}
     children_of = {}
@@ -317,7 +336,7 @@ def convert(sessions, task=None, model=None, attempt=None, tags=None):
             "tags": ["opencode"] + list(tags or []),
         }
         labels = {k: v for k, v in labels.items() if v not in (None, "", [])}
-        trace = _Trace(_hex("opencode:" + info["id"], 32), labels)
+        trace = _Trace(_hex("opencode:" + info["id"], 32), labels, price)
         root = _session(trace, sess, None, by_id, children_of, used, name=task)
         if root["ev"] == "end":
             root["totals"] = trace.totals
@@ -351,7 +370,21 @@ def main(argv=None):
     ap.add_argument("--task", help="what the run was asked to do; labels the trace")
     ap.add_argument("--model", help="the model that ran it; default is the session's own")
     ap.add_argument("--attempt", type=int, help="which attempt this was")
+    ap.add_argument(
+        "--price",
+        help="INPUT,OUTPUT[,CACHED] in US dollars per million tokens, for calls the session has no cost for",
+    )
     args = ap.parse_args(argv)
+
+    price = None
+    if args.price:
+        try:
+            parts = [float(x) for x in args.price.split(",")]
+            if len(parts) not in (2, 3) or any(x < 0 for x in parts):
+                raise ValueError
+        except ValueError:
+            ap.error("--price takes INPUT,OUTPUT or INPUT,OUTPUT,CACHED, e.g. 3,15,0.3")
+        price = (parts[0], parts[1], parts[2] if len(parts) == 3 else parts[0])
 
     sessions, skipped = [], 0
     for path in args.files:
@@ -360,7 +393,7 @@ def main(argv=None):
         except (OSError, ValueError) as exc:
             skipped += 1
             print("skipped %s: %s" % (path, exc), file=sys.stderr)
-    paths = write(convert(sessions, task=args.task, model=args.model, attempt=args.attempt), args.out)
+    paths = write(convert(sessions, task=args.task, model=args.model, attempt=args.attempt, price=price), args.out)
     print("TRACES=%d" % len(paths))
     print("SKIPPED=%d" % skipped)
     return 0 if paths or not sessions else 1
