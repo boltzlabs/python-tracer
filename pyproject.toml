@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "boltztracer"
-version = "0.2.0"
+version = "0.3.0"
 description = "A small tracer for agent runs: steps, model calls, tools, sub-agents, cost."
 readme = "README.md"
 requires-python = ">=3.9"

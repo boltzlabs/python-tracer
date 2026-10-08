@@ -97,6 +97,28 @@ with bt.llm(model="my-model", input=messages) as s:
     s.usage(input=reply.tokens_in, output=reply.tokens_out)
 ```
 
+## Without changing the program
+
+```python
+import boltztracer.auto
+```
+
+After that line, every OpenAI and Anthropic client the program creates is
+recorded, as if each had been passed through `bt.wrap()`. The line does not
+have to be in the program. A `.pth` file holding it, in the interpreter's
+site-packages, runs it at the start of every Python process:
+
+```bash
+echo "import boltztracer.auto" > "$(python -c 'import site; print(site.getsitepackages()[0])')/boltztracer.pth"
+```
+
+That is what "Record traces" on a sandbox does. A process that never calls a
+model writes nothing; one that does is one run, named after its script unless
+`BOLTZ_TRACE_TASK` names it. Where there is a `/workspace`, traces go to
+`/workspace/.boltz/traces` whatever directory the program was started in.
+`BOLTZ_TRACE=0` switches it off for one command. Tool calls and steps are not
+seen this way, only model calls: decorate those (`@bt.tool`) to have them too.
+
 ## OpenCode
 
 OpenCode is not a Python program, so it cannot import this package. It keeps

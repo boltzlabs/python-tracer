@@ -23,7 +23,7 @@ __all__ = ["FileSink", "HttpSink", "to_otlp", "span_name"]
 
 log = logging.getLogger("boltztracer")
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 def _dumps(obj):
