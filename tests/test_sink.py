@@ -63,9 +63,11 @@ def test_finished_steps_arrive_as_otlp(collector, tmp_path):
         assert {"key": "service.name", "value": {"stringValue": "pager"}} in resource["resource"]["attributes"]
         for s in resource["scopeSpans"][0]["spans"]:
             spans[s["name"]] = s
-    assert set(spans) == {"fix-bug", "chat m1", "lookup"}  # only finished steps are sent
+    # Only finished steps are sent, named the way the GenAI conventions name
+    # spans: the operation, then what it was done to.
+    assert set(spans) == {"invoke_agent fix-bug", "chat m1", "execute_tool lookup"}
 
-    llm, tool, top = spans["chat m1"], spans["lookup"], spans["fix-bug"]
+    llm, tool, top = spans["chat m1"], spans["execute_tool lookup"], spans["invoke_agent fix-bug"]
     assert llm["traceId"] == root.trace_id and len(llm["traceId"]) == 32 and len(llm["spanId"]) == 16
     assert llm["parentSpanId"] == top["spanId"] and "parentSpanId" not in top
     assert int(llm["endTimeUnixNano"]) >= int(llm["startTimeUnixNano"])
@@ -76,10 +78,12 @@ def test_finished_steps_arrive_as_otlp(collector, tmp_path):
     assert a["gen_ai.usage.cache_read.input_tokens"] == "90"
     assert a["boltz.trace.task"] == "fix-bug" and a["boltz.trace.attempt"] == "1"
     assert json.loads(a["input.value"]) == [{"role": "user", "content": "hi"}] and a["output.value"] == "hello"
+    assert a["input.mime_type"] == "application/json" and a["output.mime_type"] == "text/plain"
     assert a["boltz.cost.usd"] == pytest.approx(105 / 1e6)
 
-    assert attrs(tool)["gen_ai.tool.name"] == "lookup"
+    assert attrs(tool)["gen_ai.tool.name"] == "lookup" and attrs(top)["gen_ai.agent.name"] == "fix-bug"
     assert tool["status"]["code"] == 2 and "missing id 7" in tool["status"]["message"]
+    assert attrs(tool)["error.type"] == "KeyError"
     exception = attrs(tool["events"][0])
     assert exception["exception.type"] == "KeyError" and "KeyError" in exception["exception.stacktrace"]
     assert attrs(top)["boltz.totals.llm_calls"] == "1"

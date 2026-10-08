@@ -47,6 +47,7 @@ __all__ = [
     "price",
     "current",
     "flush",
+    "traceparent",
 ]
 
 log = logging.getLogger("boltztracer")
@@ -137,6 +138,13 @@ class _Config:
         # file can be found afterwards without reading it.
         given = (env("BOLTZ_TRACE_ID") or "").lower()
         self.trace_id = given if len(given) == 32 and all(c in "0123456789abcdef" for c in given) else None
+        # TRACEPARENT is how OpenTelemetry hands a trace to a child process
+        # (the W3C trace context, in the environment). A run started under one
+        # joins that trace, beneath the step that started it, so a tool that
+        # reads OpenTelemetry sees one trace where there were two programs.
+        self.parent_id = None
+        if self.trace_id is None:
+            self.trace_id, self.parent_id = _parse_traceparent(env("TRACEPARENT"))
         # The process-wide run, opened the first time a step needs one.
         self.implicit = None
 
@@ -279,7 +287,7 @@ def _roll_up(span):
         t["cached_tokens"] += usage.get("cached", 0) + usage.get("cache_write", 0)
         if span.cost is not None:
             t["cost"] = round((t["cost"] or 0.0) + span.cost, 8)
-        if span.parent_id is None:
+        if span._top:
             return _totals.pop(span.trace_id)
     return None
 
@@ -287,13 +295,17 @@ def _roll_up(span):
 class Span:
     """One step of a run. Use it in a ``with`` block, or call :meth:`end`."""
 
-    def __init__(self, cfg, name, kind, trace_id, parent_id, labels, input, meta, model):
+    def __init__(self, cfg, name, kind, trace_id, parent_id, labels, input, meta, model, adopted=None):
         self._cfg = cfg
         self.name = str(name)
         self.kind = kind
         self.trace_id = trace_id
         self.span_id = os.urandom(8).hex()
-        self.parent_id = parent_id
+        # The top of a run is the step with nothing of this program above it.
+        # It may still have a parent: the step, in another program, that the
+        # run was started from.
+        self._top = parent_id is None
+        self.parent_id = parent_id if parent_id is not None else adopted
         self.labels = labels
         self.model = model
         self.status = "ok"
@@ -386,7 +398,7 @@ class Span:
                     self.cost = round(_cost(p, self._usage), 8)
                 except Exception:
                     pass
-        if self.parent_id is None:
+        if self._top:
             with _lock:
                 if self in _open:
                     _open.remove(self)
@@ -480,10 +492,43 @@ def _reset(token):
         pass
 
 
+def _parse_traceparent(header):
+    """The trace and parent ids out of a W3C ``traceparent``, or two Nones."""
+    parts = (header or "").strip().lower().split("-")
+    if len(parts) != 4:
+        return None, None
+    version, trace_id, parent_id, flags = parts
+    hexes = all(c in "0123456789abcdef" for c in version + trace_id + parent_id + flags)
+    if not hexes or len(version) != 2 or len(trace_id) != 32 or len(parent_id) != 16 or len(flags) != 2:
+        return None, None
+    # All zeros means "no trace" in that format, and ff is a version that
+    # must not be read.
+    if version == "ff" or not trace_id.strip("0") or not parent_id.strip("0"):
+        return None, None
+    return trace_id, parent_id
+
+
+def traceparent(span=None):
+    """The open step as a W3C ``traceparent``, for a program started from here.
+
+        subprocess.run(cmd, env={**os.environ, "TRACEPARENT": bt.traceparent()})
+
+    A child that uses this package, or any OpenTelemetry SDK, then records its
+    steps into the same trace, under the step that started it. Returns None
+    when nothing is open.
+    """
+    span = span or _current.get()
+    if not isinstance(span, Span):
+        return None
+    return "00-%s-%s-01" % (span.trace_id, span.span_id)
+
+
 def _root(cfg, name, labels, input=None):
     with _lock:
         trace_id, cfg.trace_id = cfg.trace_id or os.urandom(16).hex(), None
-    return Span(cfg, name, "agent", trace_id, None, labels, input, None, None)
+        parent_id, cfg.parent_id = cfg.parent_id, None
+    span = Span(cfg, name, "agent", trace_id, None, labels, input, None, None, adopted=parent_id)
+    return span
 
 
 def _run(cfg):

@@ -37,10 +37,11 @@ from ._core import (
     step,
     tool,
     trace,
+    traceparent,
 )
 from ._wrap import wrap
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Span",
@@ -54,6 +55,7 @@ __all__ = [
     "step",
     "tool",
     "trace",
+    "traceparent",
     "wrap",
     "__version__",
 ]

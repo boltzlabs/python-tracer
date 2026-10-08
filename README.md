@@ -172,10 +172,60 @@ bt.init(endpoint="https://collector.example.com/v1/traces", headers={...})
 ```
 
 `endpoint` sends finished steps as OTLP/HTTP JSON, the OpenTelemetry wire
-format, with the standard `gen_ai.*` attribute names plus `boltz.*` for the
-rest. Sending happens on a background thread and never blocks or breaks the
+format. Sending happens on a background thread and never blocks or breaks the
 agent; call `bt.flush()` before exit if you need to be sure it left. A hosted
 Boltz endpoint and dashboard for these traces do not exist yet.
+
+## OpenTelemetry
+
+A trace here is shaped the way OpenTelemetry shapes one: a 32-digit trace id, a
+16-digit id for each step and its parent, nanosecond start and end times, and a
+status. The file on disk is this package's own (one JSON line per event, which
+is what makes it readable half-written); `boltztracer.otel` converts to and
+from the OpenTelemetry form, and the two conversions are tested as inverses.
+
+Out, steps follow the GenAI semantic conventions:
+
+| Step | Span name | `gen_ai.operation.name` |
+| --- | --- | --- |
+| model call | `chat <model>` | `chat` |
+| tool | `execute_tool <name>` | `execute_tool` |
+| run or sub-agent | `invoke_agent <name>` | `invoke_agent` |
+| step | `<name>` | none |
+
+with `gen_ai.request.model`, `gen_ai.usage.input_tokens` and `output_tokens`
+(and the cache counts), `gen_ai.tool.name`, `gen_ai.agent.name`, `input.value`
+and `output.value`, and a failure as an error status, `error.type` and an
+`exception` event. Cost, and the task, model and attempt a run is compared by,
+have no OpenTelemetry name and go under `boltz.*`.
+
+In, spans from an agent instrumented with OpenTelemetry become the same trace
+files, so everything that reads those files works on them:
+
+```bash
+python -m boltztracer.otel spans.json --out .boltz/traces
+```
+
+```python
+from boltztracer import otel
+traces = otel.from_otlp(request)        # {trace_id: [records]}
+otel.write(traces, ".boltz/traces")
+```
+
+Spans that use OpenInference or OpenLLMetry attribute names are recognised
+too, and ids sent as base64 are read as the hex they stand for.
+
+A run joins a trace that another program started. `TRACEPARENT` in the
+environment (the W3C trace context, which is how OpenTelemetry hands a trace
+to a child process) makes the first run of this process part of that trace,
+under the step that started it. `bt.traceparent()` gives the open step in the
+same form, to pass on:
+
+```python
+subprocess.run(cmd, env={**os.environ, "TRACEPARENT": bt.traceparent()})
+```
+
+This package does not use the OpenTelemetry SDK and does not need it.
 
 ## What is kept
 
@@ -200,6 +250,7 @@ bt.init(max_chars=100_000)
 | `BOLTZ_TRACE_ENDPOINT` | OTLP/HTTP traces URL to also send to |
 | `BOLTZ_TRACE_TASK`, `BOLTZ_TRACE_MODEL`, `BOLTZ_TRACE_ATTEMPT` | labels for traces that set none |
 | `BOLTZ_TRACE_ID` | 32 hex characters: the id of the first trace this process starts |
+| `TRACEPARENT` | a W3C trace context: the first run joins that trace, under that step |
 | `BOLTZ_TRACE_CAPTURE=0` | do not keep inputs and outputs |
 | `BOLTZ_TRACE_MAX_CHARS` | clip length |
 

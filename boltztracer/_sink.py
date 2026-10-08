@@ -19,11 +19,11 @@ import time
 import urllib.error
 import urllib.request
 
-__all__ = ["FileSink", "HttpSink", "to_otlp"]
+__all__ = ["FileSink", "HttpSink", "to_otlp", "span_name"]
 
 log = logging.getLogger("boltztracer")
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 def _dumps(obj):
@@ -185,6 +185,21 @@ def _attr(key, value):
     return {"key": key, "value": v}
 
 
+def span_name(rec):
+    """A step's name the way the GenAI conventions spell a span's.
+
+    They name a span by its operation and then what it was done to:
+    ``execute_tool search``, ``invoke_agent reviewer``, ``chat my-model``. A
+    model call is already named that way here; a tool or an agent is known by
+    its own name in the trace file, and gets the operation in front on export.
+    """
+    op = _OPERATION.get(rec["kind"])
+    name = rec["name"]
+    if op and rec["kind"] in ("tool", "agent") and not name.startswith(op + " "):
+        return op + " " + name
+    return name
+
+
 def _span(rec):
     attrs = [_attr("boltz.span.kind", rec["kind"])]
     op = _OPERATION.get(rec["kind"])
@@ -218,11 +233,14 @@ def _span(rec):
     if rec.get("cost") is not None:
         attrs.append(_attr("boltz.cost.usd", float(rec["cost"])))
 
-    # `input.value` / `output.value` are the names other tracing tools read.
-    if "input" in rec:
-        attrs.append(_attr("input.value", rec["input"] if isinstance(rec["input"], str) else _dumps(rec["input"])))
-    if "output" in rec:
-        attrs.append(_attr("output.value", rec["output"] if isinstance(rec["output"], str) else _dumps(rec["output"])))
+    # `input.value` / `output.value` are the names other tracing tools read,
+    # with the kind of text beside each: without it, the text "4" and the
+    # number 4 are the same thing on the wire and cannot be told apart again.
+    for side in ("input", "output"):
+        if side in rec:
+            text = isinstance(rec[side], str)
+            attrs.append(_attr(side + ".value", rec[side] if text else _dumps(rec[side])))
+            attrs.append(_attr(side + ".mime_type", "text/plain" if text else "application/json"))
     for k, v in (rec.get("meta") or {}).items():
         attrs.append(_attr("boltz.meta." + k, v))
     for k, v in (rec.get("totals") or {}).items():
@@ -232,7 +250,7 @@ def _span(rec):
     span = {
         "traceId": rec["trace_id"],
         "spanId": rec["span_id"],
-        "name": rec["name"],
+        "name": span_name(rec),
         "kind": 3 if rec["kind"] == "llm" else 1,  # CLIENT for a model call, else INTERNAL
         "startTimeUnixNano": str(rec["start_ns"]),
         "endTimeUnixNano": str(rec["end_ns"]),
@@ -243,6 +261,9 @@ def _span(rec):
         span["parentSpanId"] = rec["parent_id"]
     err = rec.get("error")
     if err:
+        # The conventions put the class of failure on the span itself as well
+        # as in the exception event, so it can be counted without the event.
+        attrs.append(_attr("error.type", err.get("type") or "_OTHER"))
         span["status"]["message"] = err.get("message", "")
         span["events"] = [
             {

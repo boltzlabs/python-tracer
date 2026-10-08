@@ -15,7 +15,7 @@ from boltztracer import _core  # noqa: E402
 @pytest.fixture(autouse=True)
 def fresh(monkeypatch):
     for name in list(os.environ):
-        if name.startswith("BOLTZ_TRACE") or name.startswith("BOLTZLABS_"):
+        if name.startswith("BOLTZ_TRACE") or name.startswith("BOLTZLABS_") or name == "TRACEPARENT":
             monkeypatch.delenv(name)
     _core._cfg = None
     _core._totals.clear()

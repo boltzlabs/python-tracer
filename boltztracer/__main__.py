@@ -44,7 +44,10 @@ def summarize(spans):
     """The numbers one run is compared on, recomputed from its steps so a run
     that never finished still has them."""
     recs = list(spans.values())
-    root = next((r for r in recs if not r.get("parent_id")), None)
+    # The top of the run is the step with no parent in this file. It may name
+    # one all the same: a run started from another program's trace does.
+    tops = sorted((r for r in recs if r.get("parent_id") not in spans), key=lambda r: r["start_ns"])
+    root = tops[0] if tops else None
     labels = (root or recs[0]).get("trace") or {}
     start = min(r["start_ns"] for r in recs)
     end = max(r.get("end_ns") or r["start_ns"] for r in recs)
