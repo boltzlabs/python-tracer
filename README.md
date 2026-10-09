@@ -112,9 +112,7 @@ site-packages, runs it at the start of every Python process:
 echo "import boltztracer.auto" > "$(python -c 'import site; print(site.getsitepackages()[0])')/boltztracer.pth"
 ```
 
-"Record traces" on a sandbox in the BoltzLabs desktop app does the same for
-you, in a way that also reaches virtualenvs. A process that never calls a
-model writes nothing; one that does is one run, named after its script unless
+A process that never calls a model writes nothing; one that does is one run, named after its script unless
 `BOLTZ_TRACE_TASK` names it. Where there is a `/workspace`, traces go to
 `/workspace/.boltz/traces` whatever directory the program was started in.
 `BOLTZ_TRACE=0` switches it off for one command. Tool calls and steps are not
